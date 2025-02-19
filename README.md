@@ -1,8 +1,10 @@
 # filescan_api_return
 A python script which uses the filescan API function for scanning domains, and processing via API.  
 Available output, MISP JSON, STIX JSON or plain text  
-  
-  
+
+Reference link: https://github.com/filescanio/fsio-cli
+
+
 Required install: 
 `pip install filescan_cli`  
 Note: on windows, the "windows-curses" dependency might need to be satisfied:  
