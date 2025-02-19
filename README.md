@@ -1,9 +1,12 @@
 # filescan_api_return
-A python script which uses the filescan API function for scanning domains, and processing via API
-
-
+A python script which uses the filescan API function for scanning domains, and processing via API.  
+Available output, MISP JSON, STIX JSON or plain text  
+  
+  
 Required install: 
-`pip install filescan_cli`
+`pip install filescan_cli`  
+Note: on windows, the "windows-curses" dependency might need to be satisfied:  
+`pip install windows-curses`
 
 
 
