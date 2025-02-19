@@ -1,152 +1,140 @@
 import os
 import sys
 import requests
-import json
-import uuid
-import argparse
 import time
+import argparse
+import json
 
 # Configuration
-API_KEY = "API_KEY"
+API_KEY = "rbdqovvpESoaBlVZRLwtJy24Zfhxvs6NClGZdY2k"
 BASE_URL = "https://www.filescan.io/api"
-POLLING_MAX_ATTEMPTS = 40  # Increased from 30
-POLLING_INITIAL_DELAY = 10  # Reduced from 15
-POLLING_MAX_DELAY = 300  # Increased from 120
+MAX_ATTEMPTS = 30
+POLL_INTERVAL = 10
 
-def scan_url(domain, private=False, additional_args=None):
-    print("\n=== Starting URL Scan ===")
-    if not domain.startswith(("http://", "https://")):
-        url = f"http://{domain}"
-        print(f"Added http:// prefix to domain. URL is now: {url}")
-    else:
-        url = domain
+def scan_url(url, private=False, no_sharing=False):
+    """Submit URL for scanning with privacy options"""
+    headers = {"X-Api-Key": API_KEY}
+    endpoint = f"{BASE_URL}/scan/url"
     
-    headers = {
-        "X-Api-Key": API_KEY,
-        "Accept": "application/json"
-    }
-    
-    domain_name = domain.split('/')[0].replace('.', '_')
-    filename = f"{domain_name}_{str(uuid.uuid4())[:8]}.url"
+    if not url.startswith(("http://", "https://")):
+        url = f"http://{url}"
     
     form_data = {
         "url": url,
-        "filename": filename,
-        "comment": "Automated scan",
-        "tags": "automated,routine",
-        "private": "true" if private else "false"
+        "filename": f"scan_{int(time.time())}.url",
+        "tags": "automated-scan",
+        "private": "true" if private else "false",
+        "no_sharing": "true" if no_sharing else "false"
     }
     
-    if additional_args:
-        form_data.update(additional_args)
-
     try:
-        response = requests.post(
-            f"{BASE_URL}/scan/url",
-            headers=headers,
-            data=form_data
-        )
-        
-        if response.status_code == 200:
-            result = response.json()
-            flow_id = result.get("flow_id")
-            
-            if flow_id:
-                print(f"\nScan initiated successfully. Flow ID: {flow_id}")
-                print(f"Scan overview: https://www.filescan.io/uploads/{flow_id}")
-                return flow_id
-            else:
-                print("Error: No flow_id in response")
-        else:
-            print(f"API Error: {response.status_code} - {response.text}")
-            
+        response = requests.post(endpoint, headers=headers, data=form_data)
+        response.raise_for_status()
+        return response.json().get('flow_id')
     except Exception as e:
-        print(f"Scan submission failed: {str(e)}")
-    
-    return None
+        print(f"Submission error: {str(e)}")
+        return None
 
-def poll_for_results(flow_id):
+def poll_scan_results(flow_id):
+    """Poll scan results with exponential backoff"""
     headers = {"X-Api-Key": API_KEY}
-    status_url = f"{BASE_URL}/uploads/{flow_id}"
-    report_id = None
+    endpoint = f"{BASE_URL}/scan/{flow_id}/report"
     
-    print(f"\n=== Polling Scan Status ===\n{status_url}")
+    attempts = 0
+    current_delay = POLL_INTERVAL
     
-    for attempt in range(POLLING_MAX_ATTEMPTS):
+    while attempts < MAX_ATTEMPTS:
         try:
-            response = requests.get(status_url, headers=headers)
+            response = requests.get(endpoint, headers=headers)
+            response.raise_for_status()
+            data = response.json()
             
-            if response.status_code == 200:
-                data = response.json()
-                state = data.get("state", "UNKNOWN")
-                progress = data.get("progress", 0)
-                
-                print(f"Attempt {attempt+1}: {state} ({progress}%)")
-                
-                if state == "DONE":
-                    reports = data.get("reports", [])
-                    if reports:
-                        report_id = reports[0].get("id")
-                        break
-                    else:
-                        print("No reports available yet")
-                elif state == "FAILED":
-                    print(f"Scan failed: {data.get('error', 'Unknown error')}")
-                    return
-                
-            elif response.status_code == 404:
-                print("Scan pending...")
+            print(f"\nPoll attempt {attempts+1}/{MAX_ATTEMPTS}")
+            print(f"Current status: {'All finished' if data['allFinished'] else 'Processing'}")
             
-            # Dynamic backoff calculation
-            delay = min(POLLING_INITIAL_DELAY * (2 ** attempt), POLLING_MAX_DELAY)
-            time.sleep(delay)
+            if data['allFinished']:
+                return process_final_results(data)
+                
+            current_delay = data.get('pollPause', current_delay)
+            time.sleep(current_delay)
+            attempts += 1
             
+        except requests.exceptions.HTTPError as e:
+            print(f"HTTP error: {str(e)}")
+            break
         except Exception as e:
             print(f"Polling error: {str(e)}")
             break
+    
+    print("\nMax polling attempts reached")
+    print(f"Manual check: https://www.filescan.io/uploads/{flow_id}")
+    return None
 
-    if report_id:
-        get_report(flow_id, report_id)
-    else:
-        print("\n=== Maximum Polling Attempts Reached ===")
-        print(f"Manual check: https://www.filescan.io/uploads/{flow_id}")
-
-def get_report(flow_id, report_id):
-    try:
-        report_url = f"{BASE_URL}/uploads/{flow_id}/reports/{report_id}"
-        response = requests.get(report_url, headers={"X-Api-Key": API_KEY})
+def process_final_results(data):
+    """Process and display final scan results"""
+    print("\n=== SCAN COMPLETE ===")
+    print(f"Flow ID: {data['flowId']}")
+    print(f"Final Verdict: {get_highest_verdict(data)}")
+    
+    for report_id, report in data['reports'].items():
+        print(f"\n--- Report ID: {report_id} ---")
+        print(f"File: {report['file']['name']}")
+        print(f"Hash: {report['file']['hash']}")
+        print(f"Type: {report['file'].get('type', 'N/A')}")
+        print(f"Size: {report['file'].get('size', 'N/A')} bytes")
+        print(f"Verdict: {report['finalVerdict']['verdict']}")
+        print(f"Threat Level: {report['finalVerdict']['threatLevel']}")
+        print(f"Confidence: {report['finalVerdict'].get('confidence', 'N/A')}")
         
-        if response.status_code == 200:
-            report = response.json()
-            print("\n=== Scan Report ===")
-            print(f"Final Verdict: {report.get('verdict', 'Unknown')}")
-            print(f"Threat Score: {report.get('score', 'N/A')}")
-            
-            # Process network indicators
-            if "network" in report:
-                print("\nNetwork Indicators:")
-                print(f"IPs: {', '.join(report['network'].get('ips', []))}")
-                print(f"Domains: {', '.join(report['network'].get('domains', []))}")
-            
-            print(f"\nFull Report: https://www.filescan.io/uploads/{flow_id}/reports/{report_id}/overview")
-        else:
-            print(f"Failed to retrieve report: {response.status_code}")
-            
-    except Exception as e:
-        print(f"Report retrieval failed: {str(e)}")
+        # Network indicators
+        if 'network' in report:
+            print("\nNetwork Indicators:")
+            print(f"IPs: {', '.join(report['network'].get('ips', []))}")
+            print(f"Domains: {', '.join(report['network'].get('domains', []))}")
+            print(f"URLs: {', '.join(report['network'].get('urls', []))}")
+        
+        # YARA matches
+        if 'yara' in report and report['yara']:
+            print("\nYARA Matches:")
+            for yara_match in report['yara']:
+                print(f"- Rule: {yara_match.get('rule', 'N/A')}")
+                print(f"  Description: {yara_match.get('description', 'N/A')}")
+        
+        # Sandbox analysis
+        if 'sandbox' in report:
+            print("\nSandbox Analysis:")
+            print(f"Score: {report['sandbox'].get('score', 'N/A')}")
+            print(f"Verdict: {report['sandbox'].get('verdict', 'N/A')}")
+        
+        # Additional metadata
+        print("\nAdditional Metadata:")
+        print(f"Created Date: {report.get('created_date', 'N/A')}")
+        print(f"Estimated Progress: {report.get('estimated_progress', 'N/A')}")
+    
+    return data
+
+def get_highest_verdict(data):
+    """Determine the highest threat level"""
+    max_level = 0
+    for report in data['reports'].values():
+        level = report['finalVerdict']['threatLevel']
+        if level > max_level:
+            max_level = level
+    return f"THREAT_LEVEL_{max_level}"
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="FileScan.io URL Scanner")
     parser.add_argument("url", help="URL/Domain to scan")
-    parser.add_argument("--private", action="store_true", help="Private scan")
-    parser.add_argument("--no-sharing", action="store_true", help="Disable sharing")
+    parser.add_argument("--private", action="store_true", help="Make scan private")
+    parser.add_argument("--no-sharing", action="store_true", help="Disable result sharing")
+    parser.add_argument("--json", action="store_true", help="Output results in JSON format")
+    
     args = parser.parse_args()
 
-    additional_args = {}
-    if args.no_sharing:
-        additional_args["no_sharing"] = "true"
-
-    flow_id = scan_url(args.url, private=args.private, additional_args=additional_args)
-    
-    if flow_id:
-        poll_for_results(flow_id)
+    if flow_id := scan_url(args.url, private=args.private, no_sharing=args.no_sharing):
+        print(f"Scan initiated successfully. Flow ID: {flow_id}")
+        results = poll_scan_results(flow_id)
+        if results and args.json:
+            print(json.dumps(results, indent=2))
+    else:
+        print("Failed to initiate scan")
