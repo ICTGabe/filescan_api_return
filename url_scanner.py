@@ -6,7 +6,7 @@ import argparse
 import json
 
 # Configuration
-API_KEY = "rbdqovvpESoaBlVZRLwtJy24Zfhxvs6NClGZdY2k"
+API_KEY = "API_KEY"
 BASE_URL = "https://www.filescan.io/api"
 MAX_ATTEMPTS = 30
 POLL_INTERVAL = 10
